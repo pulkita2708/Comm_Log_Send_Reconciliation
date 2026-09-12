@@ -106,8 +106,9 @@ FROM
 ) AS family_counts;
 
 Final: target_base = 22
+---
 
-3. What Surprised Me
+## 3. What Surprised Me
 
 One thing that surprised me was that campaign 9004 had four communication-log records even though its creation status was still approval_awaiting. This showed that communication records could exist even when the campaign had not yet cleared the official creation/approval workflow, so a simple COUNT(*) was not sufficient.
 
