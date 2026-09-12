@@ -104,6 +104,7 @@ FROM
     GROUP BY root_id
 
 ) AS family_counts;
+```
 
 Final: target_base = 22
 ---
