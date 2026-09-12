@@ -99,8 +99,6 @@
 | | **Final Target Base** | **22** |
 
 ### Final Calculation
-
-```text
 30 - 4 - 3 + 0 - 1 = 22
 
 ## What Was Surprising in the Data?
