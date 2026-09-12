@@ -116,12 +116,4 @@ One thing that surprised me was that campaign 9004 had four communication-log re
 Another interesting finding was that retries could form a multi-level chain, such as 9001 → 9002 → 9003. The same customer could therefore appear across multiple campaign IDs for the same underlying communication. At the same time, standalone campaign 9101 contained two legitimate sends to customer C20, showing why customer deduplication cannot be applied globally and must depend on whether the campaign belongs to a retry chain.
 
 
-### One important improvement over the other README
 
-I would **not** write that Step 3 "doesn't move the number" and stop there. In **our method**, the retry investigation is actually what explains the remaining **26 → 23 → 22** adjustments.
-
-Your strongest story for the hiring team is:
-
-> **I didn't know the answer was 22 at the beginning. I started at 30, discovered the 4 invalid campaign records, then investigated parent-child retry relationships and found two retry families that required customer-level deduplication.**
-
-That directly demonstrates the **investigation/reconciliation thinking** the assignment is asking for.
