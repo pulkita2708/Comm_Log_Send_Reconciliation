@@ -1,105 +1,80 @@
-# Comm-Log Send Reconciliation
+# Comm-Log Reconciliation — Data Dictionary
 
-##  Project Overview
+This is the raw data for the take-home in `ASSIGNMENT.md`. Everything you need is either
+in the schema below or discoverable by querying the data itself.
 
-- Reconciled Finance's expected `target_base = 22` for **Merchant 501** for **October 2026**.
-- Used **MySQL** to analyze campaign and communication-log data.
-- Started with a naive communication-log count of **30 records**.
-- Investigated the discrepancy between the raw count and Finance's expected value.
-- Identified campaign eligibility and retry relationships as the key reasons for the difference.
-- Built SQL logic to reproduce the final Finance target without hard-coding the answer.
+## Loading the data
 
----
+`data/comm_log.db` is a SQLite database with two tables (also available as
+`data/campaign.csv` and `data/communication_log.csv` if you prefer a different tool).
 
-## Business Objective
+```
+sqlite3 data/comm_log.db
+.tables
+.schema campaign
+.schema communication_log
+```
 
-- Determine the correct number of qualifying communication events/customers for:
-  - **Merchant:** 501
-  - **Period:** October 2026
-  - **Communication Type:** Campaign (`communication_type = '2'`)
-- Reconcile the raw communication-log count with Finance's expected `target_base` of **22**.
+## Table: `campaign`
 
----
+One row per campaign. A campaign can be a **retry** of an earlier campaign — this is
+how the system represents "we re-sent to customers who didn't respond/failed on a
+previous attempt."
 
-## Dataset
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | int | Campaign id. |
+| `merchant_id` | int | Owning merchant. |
+| `parent_id` | int, nullable | If set, this campaign is a retry attempt of `parent_id`. NULL means this campaign was not created as a retry of anything (it may still have its own retries pointing at it). |
+| `name` | text | Human-readable label. |
+| `creation_status` | text | Lifecycle state of the campaign's *creation/approval* workflow. Values seen in this dataset: `approved`, `approval_awaiting`. Other real values include `aborted`, `resumed`, `stopped` (all of these, plus `approved`, are considered finalized/live for reporting purposes). `approval_awaiting` means the campaign has not cleared approval yet. |
+| `processing_status` | text | Lifecycle state of the campaign's *send* workflow. `processed` means the send pipeline has finished running for this campaign. |
 
-### Campaign Table
-- Contains campaign-level information.
-- Important columns:
-  - `id`
-  - `merchant_id`
-  - `parent_id`
-  - `name`
-  - `creation_status`
-  - `processing_status`
+**A campaign is included in official reporting only once both its creation workflow
+has cleared (`creation_status` in the finalized set above) and its processing has
+completed (`processing_status = 'processed'`).** A campaign still `approval_awaiting`
+has not been signed off and does not count toward reported sends, even if
+`communication_log` rows already exist for it (the send pipeline can run ahead of
+approval bookkeeping catching up).
 
-### Communication Log Table
-- Contains individual communication/send records.
-- Important columns:
-  - `id`
-  - `merchant_id`
-  - `communication_id`
-  - `customer_id`
-  - `communication_type`
-  - `delivery_status`
-  - `sent_time`
+## Table: `communication_log`
 
----
+One row per individual send attempt.
 
-##  Investigation Approach
+| Column | Type | Meaning |
+|---|---|---|
+| `id` | int | Row id (one per send attempt). |
+| `merchant_id` | int | Owning merchant. |
+| `communication_id` | int | FK to `campaign.id` — which campaign this attempt belongs to. |
+| `customer_id` | text | Customer targeted. |
+| `communication_type` | text | `'2'` = Campaign (the only type in this dataset). |
+| `delivery_status` | int | `900` = delivered successfully. `1100` = failed (soft failure — the customer may be retried via a new campaign row, or genuinely re-targeted later). |
+| `sent_time` / `scheduled_time` | timestamp | When the send happened / was scheduled. |
+| `credit_used` | int | Billing credits consumed by this attempt. |
+| `channel` | text | Send channel (`sms` throughout this dataset). |
 
-- Calculated the initial **naive count = 30** using the communication log.
-- Joined `communication_log` with `campaign` to validate campaign eligibility.
-- Identified campaign `9004` as `approval_awaiting`.
-- Found **4 communication records** associated with campaign `9004`.
-- Excluded those records because the campaign had not completed the required creation/approval workflow.
-- Final eligible records after status filtering = **26**.
-- Investigated `parent_id` relationships to identify retry campaigns.
-- Identified two retry families:
-  - `9001 → 9002 → 9003`
-  - `9201 → 9202`
-- Identified `9101` as a standalone campaign.
+**A customer can legitimately appear more than once against the same `communication_id`.**
+This happens when a campaign is independently re-run or a customer is re-targeted after
+falling back into the audience — it is a separate event from a *retry*, which always
+creates a **new** campaign row (`campaign.parent_id` pointing back at the original).
 
----
+## Retry chains
 
-## Retry Handling
+If campaign B has `parent_id = A`, B represents "the same underlying communication,
+re-attempted." A chain can be more than two levels deep (A -> B -> C). A customer who
+was sent A (and failed), then B (and failed), then C (and delivered) was targeted by
+the *same underlying communication* three times — not three independent communications.
 
-### Retry Family: 9001 → 9002 → 9003
+## What "reporting" considers a qualifying send
 
-- Raw communication attempts = **13**
-- Unique customers = **10**
-- Since these campaigns represent retries of the same underlying communication, customers were counted only once.
-- Adjustment = **-3**
+Finance's `target_base` metric answers: **for a given underlying communication (a
+campaign plus every retry chained off it), how many distinct customers were reached?**
+A customer who took several attempts within one retry chain to finally get delivered
+still counts once. A campaign with no retry chain at all (no other campaign points at
+it, and it points at nothing) is a standalone communication — every send under it is
+its own event, whether or not the same customer appears twice.
 
-### Standalone Campaign: 9101
+## Scope for this exercise
 
-- Communication events = **7**
-- Repeated customer records were retained.
-- Since the campaign is standalone, each send is treated as a separate event.
-- Adjustment = **0**
-
-### Retry Family: 9201 → 9202
-
-- Raw communication attempts = **6**
-- Unique customers = **5**
-- Retry attempts were deduplicated at the customer level.
-- Adjustment = **-1**
-
----
-
-##  Reconciliation Bridge
-
-| Step | Description | Count |
-|------|-------------|------:|
-| 1 | Naive October communication-log count | 30 |
-| 2 | Exclude `9004` (`approval_awaiting`) | -4 |
-| 3 | Deduplicate retry family `9001 → 9002 → 9003` | -3 |
-| 4 | Retain standalone campaign `9101` events | 0 |
-| 5 | Deduplicate retry family `9201 → 9202` | -1 |
-| | **Final Target Base** | **22** |
-
-### Final Calculation
-30 - 4 - 3 + 0 - 1 = 22
-
-## What Was Surprising in the Data?
-One surprising aspect of the data was that communication-log records existed for campaign 9004 even though the campaign was still in an approval_awaiting state. This meant that a simple COUNT(*) over the communication log produced 30 records, while the Finance target was 22. I also found that campaigns could form retry chains through parent_id, such as 9001 → 9002 → 9003 and 9201 → 9202. These retries should not be treated as independent qualifying communications, whereas repeated sends within the standalone campaign 9101 remain separate events. This made campaign lifecycle status and parent-child relationships critical to the reconciliation.
+All data is for `merchant_id = 501`, sends in October 2026, `communication_type = '2'`
+(Campaign) only.
